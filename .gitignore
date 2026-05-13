@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+
+# Local working files — not part of the released card
+.claude/
+memory/
+Kompass_de_S.svg.png
