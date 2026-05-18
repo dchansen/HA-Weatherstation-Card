@@ -2,7 +2,7 @@
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=GB-1972&repository=HA-Weatherstation-Card&category=plugin)
 
-A Home Assistant Lovelace card in **Mushroom style** showing a 16-point compass rose with a wind-direction arrow plus configurable chips for **temperature, humidity, pressure, wind speed, wind gusts, current rain and rain over the last 24 hours**.
+A Home Assistant Lovelace card in **Mushroom style** showing a 16-point compass rose with a wind-direction arrow plus configurable chips for **temperature, humidity, pressure, wind speed, wind gusts, UV index, current rain and rain over the last 24 hours**.
 
 ![Weather Station Card screenshot](screenshot.png)
 
@@ -10,7 +10,9 @@ A Home Assistant Lovelace card in **Mushroom style** showing a 16-point compass 
 
 - **16-point compass rose** drawn as inline SVG — no images, no external assets
 - **Red wind-direction arrow** that rotates smoothly to the current heading
-- **Seven sensor chips** in Mushroom style — temperature, humidity, pressure, wind, gusts, rain, rain 24 h. Each is optional; unconfigured chips are hidden automatically
+- **Wind-direction invert** — optional toggle to show the direction the wind blows *to* instead of where it comes *from*
+- **Eight sensor chips** in Mushroom style — temperature, humidity, pressure, wind, gusts, UV index, rain, rain 24 h. Each is optional; unconfigured chips are hidden automatically
+- **Per-metric color thresholds** — chip icons can change color based on the value (e.g. temperature blue → green → yellow → red, or rain grey → blue). Configured in a dedicated **Colors** editor tab
 - **Visual editor** with entity selectors for every field — no YAML required
 - **Wind direction input** accepts either a degree value (0–360) **or** a text label (`N`, `NE`/`NO`, `E`/`O`, `SE`/`SO`, …). Both English and German abbreviations are recognised
 - **Units auto-detected** from each entity's `unit_of_measurement` attribute, with fallbacks (`°C` / `%` / `hPa` / `km/h` / `mm`)
@@ -68,44 +70,93 @@ pressure: sensor.outdoor_pressure
 wind_speed: sensor.wind_speed
 wind_gust: sensor.wind_gust
 wind_direction: sensor.wind_direction   # degrees 0–360 OR text (N, NE, ...)
+wind_direction_invert: false             # true → show where wind blows TO
+uv_index: sensor.uv_index
 rain_current: sensor.rain_current        # in mm
 rain_24h: sensor.rain_24h                # in mm
+
+# Optional: per-metric icon color thresholds (color applies from value upward)
+color_thresholds:
+  temperature:
+    - value: -10
+      color: "#2196f3"   # cold → blue
+    - value: 10
+      color: "#4caf50"   # mild → green
+    - value: 22
+      color: "#ffeb3b"   # warm → yellow
+    - value: 30
+      color: "#f44336"   # hot  → red
+  rain_current:
+    - value: 0
+      color: "#9e9e9e"   # dry  → grey
+    - value: 0.1
+      color: "#2196f3"   # rain → blue
 ```
 
 Everything is also editable through the visual editor — no YAML knowledge required.
 
 ## Options
 
-| Option           | Type     | Description                                                               |
-| ---------------- | -------- | ------------------------------------------------------------------------- |
-| `title`          | string   | Card title shown above the compass (default `"Weather Station"`)          |
-| `temperature`    | entity   | Sensor reporting current temperature                                      |
-| `humidity`       | entity   | Sensor reporting relative humidity                                        |
-| `pressure`       | entity   | Sensor reporting atmospheric pressure                                     |
-| `wind_speed`     | entity   | Sensor reporting wind speed                                               |
-| `wind_gust`      | entity   | Sensor reporting wind gust speed                                          |
-| `wind_direction` | entity   | Sensor reporting wind direction (degrees `0`–`360` **or** text like `NE`) |
-| `rain_current`   | entity   | Sensor reporting current rain amount (mm)                                 |
-| `rain_24h`       | entity   | Sensor reporting rain over the last 24 h (mm)                             |
+| Option                  | Type     | Description                                                                                  |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------- |
+| `title`                 | string   | Card title shown above the compass (default `"Weather Station"`)                             |
+| `temperature`           | entity   | Sensor reporting current temperature                                                         |
+| `humidity`              | entity   | Sensor reporting relative humidity                                                           |
+| `pressure`              | entity   | Sensor reporting atmospheric pressure                                                        |
+| `wind_speed`            | entity   | Sensor reporting wind speed                                                                  |
+| `wind_gust`             | entity   | Sensor reporting wind gust speed                                                             |
+| `wind_direction`        | entity   | Sensor reporting wind direction (degrees `0`–`360` **or** text like `NE`)                    |
+| `wind_direction_invert` | boolean  | `true` adds 180° → arrow/caption show the direction the wind blows **to** (default `false`)  |
+| `uv_index`              | entity   | Sensor reporting the UV index                                                                |
+| `rain_current`          | entity   | Sensor reporting current rain amount (mm)                                                    |
+| `rain_24h`              | entity   | Sensor reporting rain over the last 24 h (mm)                                                |
+| `color_thresholds`      | object   | Per-metric icon color thresholds — see [Color thresholds](#color-thresholds)                 |
 
-Leave any option blank to hide that chip.
+Leave any entity option blank to hide that chip.
 
 ### Wind direction conventions
 
 The red arrow points in the direction indicated by the sensor value. Most
 Home Assistant weather integrations report wind direction as the direction
-the wind is *coming from* — that's what the card displays as-is.
+the wind is *coming from* — that's what the card displays by default.
 
-If your sensor reports "where the wind is going to" instead, wrap it in a
-template sensor:
+If you want the arrow to show the direction the wind blows **to**, just enable
+`wind_direction_invert: true` (or tick the toggle in the editor). The card adds
+180° internally — no template sensor needed.
+
+## Color thresholds
+
+Each chip icon can change color based on its current value. Open the
+**Colors** tab in the visual editor and add one or more thresholds per metric.
+A threshold's color applies **from its value upward**; anything below the
+lowest threshold uses the lowest threshold's color, so the whole range is
+covered. Without any thresholds the chip keeps its default static color
+(fully backward compatible).
+
+YAML shape:
 
 ```yaml
-template:
-  - sensor:
-      - name: "Wind Direction From"
-        unit_of_measurement: "°"
-        state: >
-          {{ (states('sensor.wind_direction_to') | float + 180) % 360 }}
+color_thresholds:
+  <metric>:
+    - value: <number>     # apply this color from here upward
+      color: "#rrggbb"
+```
+
+Valid `<metric>` keys: `temperature`, `humidity`, `pressure`, `wind_speed`,
+`wind_gust`, `uv_index`, `rain_current`, `rain_24h`.
+
+Example — temperature blue→green→yellow→red and a dry/wet rain indicator:
+
+```yaml
+color_thresholds:
+  temperature:
+    - { value: -10, color: "#2196f3" }
+    - { value: 10,  color: "#4caf50" }
+    - { value: 22,  color: "#ffeb3b" }
+    - { value: 30,  color: "#f44336" }
+  rain_current:
+    - { value: 0,   color: "#9e9e9e" }
+    - { value: 0.1, color: "#2196f3" }
 ```
 
 ### Accepted text labels for wind direction

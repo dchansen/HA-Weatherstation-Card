@@ -1,11 +1,13 @@
 /**
- * Weather Station Card – v1.0.0
+ * Weather Station Card – v1.1.0
  *
  * Home Assistant Lovelace card in Mushroom style:
  *   • 16-point inline-SVG compass rose with red wind-direction arrow
+ *   • Optional wind-direction invert (show where the wind blows TO)
  *   • Temperature, humidity, pressure
- *   • Wind speed, wind gusts
+ *   • Wind speed, wind gusts, UV index
  *   • Current rain, rain over the last 24 h
+ *   • Per-metric color thresholds for the chip icons (own editor tab)
  *
  * Fully configurable via the visual editor.
  */
@@ -32,12 +34,23 @@ const TEXT_TO_DEG = {
   W: 270, WNW: 292.5, NW: 315, NNW: 337.5,
 };
 
-function parseDirection(raw) {
+/**
+ * @param {*} raw     entity state (degrees or text label)
+ * @param {boolean} invert  add 180° → show direction the wind blows TO
+ */
+function parseDirection(raw, invert = false) {
   if (raw === undefined || raw === null || raw === "") return null;
+  let deg;
   const num = Number(raw);
-  if (!isNaN(num)) return ((num % 360) + 360) % 360;
-  const key = String(raw).trim().toUpperCase();
-  return TEXT_TO_DEG[key] ?? null;
+  if (!isNaN(num)) {
+    deg = ((num % 360) + 360) % 360;
+  } else {
+    const key = String(raw).trim().toUpperCase();
+    deg = TEXT_TO_DEG[key];
+    if (deg === undefined) return null;
+  }
+  if (invert) deg = (deg + 180) % 360;
+  return deg;
 }
 
 function degToCompass(deg) {
@@ -50,6 +63,40 @@ function fmt(value, digits = 0) {
   if (value === undefined || value === null || value === "" || isNaN(value)) return "–";
   return Number(value).toFixed(digits);
 }
+
+/**
+ * Resolve an icon color from ascending value thresholds.
+ * Each threshold's color applies FROM its value upward. Anything below the
+ * lowest threshold uses the lowest threshold's color, so the whole range is
+ * covered. With no thresholds the static fallback color is used.
+ */
+function resolveColor(thresholds, value, fallback) {
+  if (!Array.isArray(thresholds) || thresholds.length === 0) return fallback;
+  const num = Number(value);
+  if (value === undefined || value === null || value === "" || isNaN(num)) return fallback;
+  const sorted = thresholds
+    .filter((t) => t && t.color != null && t.color !== "" && !isNaN(Number(t.value)))
+    .map((t) => ({ value: Number(t.value), color: t.color }))
+    .sort((a, b) => a.value - b.value);
+  if (sorted.length === 0) return fallback;
+  let col = sorted[0].color;
+  for (const t of sorted) {
+    if (num >= t.value) col = t.color;
+  }
+  return col;
+}
+
+/* Shared metric definitions (key → label / unit / default color / icon) */
+const METRICS = [
+  { key: "temperature",  label: "Temperatur",  unit: "°C",   def: "#ef5350", icon: "mdi:thermometer",            digits: 1 },
+  { key: "humidity",     label: "Luftfeuchte", unit: "%",    def: "#42a5f5", icon: "mdi:water-percent",          digits: 0 },
+  { key: "pressure",     label: "Luftdruck",   unit: "hPa",  def: "#ab47bc", icon: "mdi:gauge",                  digits: 0 },
+  { key: "wind_speed",   label: "Wind",        unit: "km/h", def: "#26c6da", icon: "mdi:weather-windy",          digits: 0 },
+  { key: "wind_gust",    label: "Böen",        unit: "km/h", def: "#26a69a", icon: "mdi:weather-windy-variant",  digits: 0 },
+  { key: "uv_index",     label: "UV-Index",    unit: "",     def: "#ffa726", icon: "mdi:weather-sunny",          digits: 0 },
+  { key: "rain_current", label: "Regen",       unit: "mm",   def: "#5c6bc0", icon: "mdi:weather-pouring",        digits: 1 },
+  { key: "rain_24h",     label: "Regen 24 h",  unit: "mm",   def: "#3949ab", icon: "mdi:weather-rainy",          digits: 1 },
+];
 
 /* ------------------------------------------------------------------ */
 /*  Hauptkarte                                                         */
@@ -81,8 +128,11 @@ class WeatherStationCard extends LitElement {
       wind_speed: findFirst("wind_speed"),
       wind_gust: "",
       wind_direction: "",
+      wind_direction_invert: false,
+      uv_index: "",
       rain_current: "",
       rain_24h: "",
+      color_thresholds: {},
     };
   }
 
@@ -96,8 +146,11 @@ class WeatherStationCard extends LitElement {
       wind_speed: "",
       wind_gust: "",
       wind_direction: "",
+      wind_direction_invert: false,
+      uv_index: "",
       rain_current: "",
       rain_24h: "",
+      color_thresholds: {},
       ...config,
     };
   }
@@ -250,73 +303,24 @@ class WeatherStationCard extends LitElement {
     if (!this._config || !this.hass) return html``;
 
     const c = this._config;
-    const dirDeg = parseDirection(this._state(c.wind_direction));
+    const ct = c.color_thresholds || {};
+    const dirDeg = parseDirection(
+      this._state(c.wind_direction),
+      !!c.wind_direction_invert
+    );
 
-    const chips = [
-      {
-        entity: c.temperature,
-        icon: "mdi:thermometer",
-        label: "Temperatur",
-        value: this._state(c.temperature),
-        unit: this._unit(c.temperature, "°C"),
-        color: "#ef5350",
-        digits: 1,
-      },
-      {
-        entity: c.humidity,
-        icon: "mdi:water-percent",
-        label: "Luftfeuchte",
-        value: this._state(c.humidity),
-        unit: this._unit(c.humidity, "%"),
-        color: "#42a5f5",
-        digits: 0,
-      },
-      {
-        entity: c.pressure,
-        icon: "mdi:gauge",
-        label: "Luftdruck",
-        value: this._state(c.pressure),
-        unit: this._unit(c.pressure, "hPa"),
-        color: "#ab47bc",
-        digits: 0,
-      },
-      {
-        entity: c.wind_speed,
-        icon: "mdi:weather-windy",
-        label: "Wind",
-        value: this._state(c.wind_speed),
-        unit: this._unit(c.wind_speed, "km/h"),
-        color: "#26c6da",
-        digits: 0,
-      },
-      {
-        entity: c.wind_gust,
-        icon: "mdi:weather-windy-variant",
-        label: "Böen",
-        value: this._state(c.wind_gust),
-        unit: this._unit(c.wind_gust, "km/h"),
-        color: "#26a69a",
-        digits: 0,
-      },
-      {
-        entity: c.rain_current,
-        icon: "mdi:weather-pouring",
-        label: "Regen",
-        value: this._state(c.rain_current),
-        unit: this._unit(c.rain_current, "mm"),
-        color: "#5c6bc0",
-        digits: 1,
-      },
-      {
-        entity: c.rain_24h,
-        icon: "mdi:weather-rainy",
-        label: "Regen 24 h",
-        value: this._state(c.rain_24h),
-        unit: this._unit(c.rain_24h, "mm"),
-        color: "#3949ab",
-        digits: 1,
-      },
-    ].filter((ch) => ch.entity);
+    const chips = METRICS.filter((m) => c[m.key]).map((m) => {
+      const value = this._state(c[m.key]);
+      return {
+        entity: c[m.key],
+        icon: m.icon,
+        label: m.label,
+        value,
+        unit: this._unit(c[m.key], m.unit),
+        color: resolveColor(ct[m.key], value, m.def),
+        digits: m.digits,
+      };
+    });
 
     return html`
       <ha-card>
@@ -514,17 +518,20 @@ class WeatherStationCard extends LitElement {
 }
 
 /* ------------------------------------------------------------------ */
-/*  UI-Editor                                                          */
+/*  UI-Editor (Reiter: Entitäten / Farben)                             */
 /* ------------------------------------------------------------------ */
 
 class WeatherStationCardEditor extends LitElement {
   static get properties() {
-    return { hass: {}, _config: {} };
+    return { hass: {}, _config: {}, _tab: {} };
   }
 
   setConfig(config) {
     this._config = { ...config };
+    if (!this._tab) this._tab = "entities";
   }
+
+  /* ---- Entitäten-Reiter ---- */
 
   _schema() {
     const ent = (domains = ["sensor", "input_number"]) => ({
@@ -538,6 +545,8 @@ class WeatherStationCardEditor extends LitElement {
       { name: "wind_speed", ...ent() },
       { name: "wind_gust", ...ent() },
       { name: "wind_direction", ...ent(["sensor", "input_number", "input_text"]) },
+      { name: "wind_direction_invert", selector: { boolean: {} } },
+      { name: "uv_index", ...ent() },
       { name: "rain_current", ...ent() },
       { name: "rain_24h", ...ent() },
     ];
@@ -553,35 +562,161 @@ class WeatherStationCardEditor extends LitElement {
         wind_speed: "Windgeschwindigkeit",
         wind_gust: "Windböen",
         wind_direction: "Windrichtung (° oder Text)",
+        wind_direction_invert: "Windrichtung umkehren (Richtung, in die der Wind weht)",
+        uv_index: "UV-Index",
         rain_current: "Regen aktuell (mm)",
         rain_24h: "Regen 24 h (mm)",
       }[s.name] || s.name
     );
   }
 
-  render() {
-    if (!this.hass || !this._config) return html``;
+  _valueChanged(ev) {
+    const newConfig = { ...this._config, ...ev.detail.value };
+    this._config = newConfig;
+    this._emit(newConfig);
+  }
+
+  /* ---- Farben-Reiter ---- */
+
+  _thresholds(key) {
+    const ct = this._config.color_thresholds || {};
+    return Array.isArray(ct[key]) ? ct[key] : [];
+  }
+
+  _commitThresholds(key, arr) {
+    const ct = { ...(this._config.color_thresholds || {}) };
+    if (arr.length === 0) delete ct[key];
+    else ct[key] = arr;
+    const newConfig = { ...this._config, color_thresholds: ct };
+    this._config = newConfig;
+    this._emit(newConfig);
+  }
+
+  _addRow(key) {
+    this._commitThresholds(key, [
+      ...this._thresholds(key),
+      { value: 0, color: "#03a9f4" },
+    ]);
+  }
+
+  _removeRow(key, idx) {
+    this._commitThresholds(
+      key,
+      this._thresholds(key).filter((_, i) => i !== idx)
+    );
+  }
+
+  _setField(key, idx, field, raw) {
+    const arr = this._thresholds(key).map((t, i) => {
+      if (i !== idx) return t;
+      if (field === "value") {
+        const num = parseFloat(raw);
+        return { ...t, value: isNaN(num) ? 0 : num };
+      }
+      return { ...t, color: raw };
+    });
+    this._commitThresholds(key, arr);
+  }
+
+  _renderColors() {
     return html`
-      <ha-form
-        .hass=${this.hass}
-        .data=${this._config}
-        .schema=${this._schema()}
-        .computeLabel=${(s) => this._label(s)}
-        @value-changed=${this._valueChanged}
-      ></ha-form>
+      <div class="hint">
+        Lege je Messwert Farbschwellen fest. Die Farbe gilt <b>ab</b> dem
+        angegebenen Wert aufwärts (aufsteigend sortiert). Ohne Schwellen bleibt
+        die Standardfarbe des Icons.
+      </div>
+      ${METRICS.map((m) => {
+        const list = this._thresholds(m.key);
+        return html`
+          <div class="metric">
+            <div class="metric-head">
+              ${m.label}${m.unit ? html` <span class="mu">(${m.unit})</span>` : ""}
+            </div>
+            ${list.length === 0
+              ? html`<div class="empty">Keine Schwellen – Standardfarbe</div>`
+              : list.map(
+                  (t, i) => html`
+                    <div class="trow">
+                      <input
+                        class="tval"
+                        type="number"
+                        step="any"
+                        .value=${String(t.value ?? "")}
+                        @change=${(e) =>
+                          this._setField(m.key, i, "value", e.target.value)}
+                      />
+                      <input
+                        class="tcol"
+                        type="color"
+                        .value=${t.color || "#03a9f4"}
+                        @change=${(e) =>
+                          this._setField(m.key, i, "color", e.target.value)}
+                      />
+                      <button
+                        class="ticon"
+                        title="Schwelle entfernen"
+                        @click=${() => this._removeRow(m.key, i)}
+                      >
+                        <ha-icon icon="mdi:delete"></ha-icon>
+                      </button>
+                    </div>
+                  `
+                )}
+            <button class="tadd" @click=${() => this._addRow(m.key)}>
+              <ha-icon icon="mdi:plus"></ha-icon> Schwelle hinzufügen
+            </button>
+          </div>
+        `;
+      })}
     `;
   }
 
-  _valueChanged(ev) {
-    const newConfig = ev.detail.value;
-    this._config = newConfig;
+  /* ---- gemeinsam ---- */
+
+  _emit(config) {
     this.dispatchEvent(
       new CustomEvent("config-changed", {
-        detail: { config: newConfig },
+        detail: { config },
         bubbles: true,
         composed: true,
       })
     );
+  }
+
+  _setTab(t) {
+    this._tab = t;
+  }
+
+  render() {
+    if (!this.hass || !this._config) return html``;
+    const tab = this._tab || "entities";
+    return html`
+      <div class="tabs">
+        <button
+          class="tab ${tab === "entities" ? "active" : ""}"
+          @click=${() => this._setTab("entities")}
+        >
+          Entitäten
+        </button>
+        <button
+          class="tab ${tab === "colors" ? "active" : ""}"
+          @click=${() => this._setTab("colors")}
+        >
+          Farben
+        </button>
+      </div>
+      ${tab === "entities"
+        ? html`
+            <ha-form
+              .hass=${this.hass}
+              .data=${this._config}
+              .schema=${this._schema()}
+              .computeLabel=${(s) => this._label(s)}
+              @value-changed=${this._valueChanged}
+            ></ha-form>
+          `
+        : this._renderColors()}
+    `;
   }
 
   static get styles() {
@@ -589,6 +724,105 @@ class WeatherStationCardEditor extends LitElement {
       ha-form {
         display: block;
         padding: 8px 0;
+      }
+      .tabs {
+        display: flex;
+        gap: 4px;
+        border-bottom: 1px solid var(--divider-color);
+        margin-bottom: 8px;
+      }
+      .tab {
+        appearance: none;
+        border: none;
+        background: none;
+        cursor: pointer;
+        padding: 10px 16px;
+        font: inherit;
+        color: var(--secondary-text-color);
+        border-bottom: 2px solid transparent;
+      }
+      .tab.active {
+        color: var(--primary-color);
+        border-bottom-color: var(--primary-color);
+        font-weight: 600;
+      }
+      .hint {
+        font-size: 0.85em;
+        color: var(--secondary-text-color);
+        margin: 4px 0 12px;
+        line-height: 1.4;
+      }
+      .metric {
+        padding: 10px 0;
+        border-bottom: 1px solid var(--divider-color);
+      }
+      .metric:last-child {
+        border-bottom: none;
+      }
+      .metric-head {
+        font-weight: 600;
+        margin-bottom: 6px;
+        color: var(--primary-text-color);
+      }
+      .mu {
+        color: var(--secondary-text-color);
+        font-weight: 400;
+        font-size: 0.85em;
+      }
+      .empty {
+        font-size: 0.8em;
+        color: var(--secondary-text-color);
+        margin-bottom: 6px;
+      }
+      .trow {
+        display: grid;
+        grid-template-columns: 1fr 48px 40px;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+      .tval {
+        padding: 8px;
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+        background: var(--card-background-color);
+        color: var(--primary-text-color);
+        font: inherit;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .tcol {
+        width: 48px;
+        height: 36px;
+        padding: 0;
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+        background: none;
+        cursor: pointer;
+      }
+      .ticon,
+      .tadd {
+        appearance: none;
+        border: none;
+        cursor: pointer;
+        font: inherit;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: none;
+        color: var(--secondary-text-color);
+      }
+      .ticon {
+        justify-content: center;
+      }
+      .tadd {
+        margin-top: 4px;
+        padding: 6px 0;
+        color: var(--primary-color);
+      }
+      .ticon ha-icon,
+      .tadd ha-icon {
+        --mdc-icon-size: 20px;
       }
     `;
   }
@@ -606,12 +840,12 @@ window.customCards.push({
   type: "weatherstation-card",
   name: "Weather Station",
   description:
-    "Mushroom-style weather card: compass rose with wind arrow, temperature, humidity, pressure, wind, gusts, rain.",
+    "Mushroom-style weather card: compass rose with wind arrow, temperature, humidity, pressure, wind, gusts, UV, rain — with per-metric color thresholds.",
   preview: true,
 });
 
 console.info(
-  "%c WEATHERSTATION-CARD %c v1.0.0 ",
+  "%c WEATHERSTATION-CARD %c v1.1.0 ",
   "color:white;background:#03a9f4;font-weight:700;border-radius:4px 0 0 4px;padding:2px 6px",
   "color:#03a9f4;background:white;font-weight:700;border-radius:0 4px 4px 0;padding:2px 6px;border:1px solid #03a9f4"
 );
