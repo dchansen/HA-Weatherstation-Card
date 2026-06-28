@@ -1,5 +1,5 @@
 /**
- * Weather Station Card – v1.2.0
+ * Weather Station Card – v1.3.0
  *
  * Home Assistant Lovelace card in Mushroom style:
  *   • 16-point inline-SVG compass rose with red wind-direction arrow
@@ -8,6 +8,7 @@
  *   • Wind speed, wind gusts, UV index
  *   • Current rain, rain over the last 24 h
  *   • Per-metric color thresholds for the chip icons (own editor tab)
+ *   • UI labels localized via hass.language (en/de/da, falls back to en)
  *
  * Fully configurable via the visual editor.
  */
@@ -19,7 +20,153 @@ const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
 /* ------------------------------------------------------------------ */
-/*  Hilfsfunktionen                                                    */
+/*  Localization                                                       */
+/* ------------------------------------------------------------------ */
+/*
+ * Bundled directly into the JS (rather than fetched as separate JSON
+ * files) so the card keeps working as a single-file HACS resource with
+ * no extra network request. To add a language, add a key here.
+ */
+const TRANSLATIONS = {
+  en: {
+    metrics: {
+      temperature: "Temperature",
+      humidity: "Humidity",
+      pressure: "Pressure",
+      wind_speed: "Wind",
+      wind_gust: "Gusts",
+      uv_index: "UV index",
+      rain_current: "Rain",
+      rain_24h: "Rain 24 h",
+    },
+    card: {
+      wind_placeholder: "Wind",
+      invalid_config: "Invalid configuration",
+    },
+    editor: {
+      tab_entities: "Entities",
+      tab_colors: "Colors",
+      fields: {
+        title: "Title",
+        temperature: "Temperature",
+        humidity: "Humidity",
+        pressure: "Pressure",
+        wind_speed: "Wind speed",
+        wind_gust: "Wind gusts",
+        wind_direction: "Wind direction (° or text)",
+        wind_arrow_invert: "Invert arrow (shows direction wind blows to)",
+        wind_text_invert: "Invert text/degrees (shows direction wind blows to)",
+        uv_index: "UV index",
+        rain_current: "Rain current (mm)",
+        rain_24h: "Rain 24 h (mm)",
+      },
+      colors_hint:
+        "The color applies from the given value upward (sorted ascending). Without thresholds the chip keeps its default color.",
+      no_thresholds: "No thresholds – default color",
+      add_threshold: "Add threshold",
+      remove_threshold: "Remove threshold",
+    },
+  },
+  de: {
+    metrics: {
+      temperature: "Temperatur",
+      humidity: "Luftfeuchte",
+      pressure: "Luftdruck",
+      wind_speed: "Wind",
+      wind_gust: "Böen",
+      uv_index: "UV-Index",
+      rain_current: "Regen",
+      rain_24h: "Regen 24 h",
+    },
+    card: {
+      wind_placeholder: "Wind",
+      invalid_config: "Ungültige Konfiguration",
+    },
+    editor: {
+      tab_entities: "Entitäten",
+      tab_colors: "Farben",
+      fields: {
+        title: "Titel",
+        temperature: "Temperatur",
+        humidity: "Luftfeuchte",
+        pressure: "Luftdruck",
+        wind_speed: "Windgeschwindigkeit",
+        wind_gust: "Windböen",
+        wind_direction: "Windrichtung (° oder Text)",
+        wind_arrow_invert: "Pfeil umkehren (zeigt Richtung, in die der Wind weht)",
+        wind_text_invert: "Text/Grad umkehren (zeigt Richtung, in die der Wind weht)",
+        uv_index: "UV-Index",
+        rain_current: "Regen aktuell (mm)",
+        rain_24h: "Regen 24 h (mm)",
+      },
+      colors_hint:
+        "Die Farbe gilt ab dem angegebenen Wert aufwärts (aufsteigend sortiert). Ohne Schwellen bleibt die Standardfarbe erhalten.",
+      no_thresholds: "Keine Schwellen – Standardfarbe",
+      add_threshold: "Schwelle hinzufügen",
+      remove_threshold: "Schwelle entfernen",
+    },
+  },
+  da: {
+    metrics: {
+      temperature: "Temperatur",
+      humidity: "Luftfugtighed",
+      pressure: "Lufttryk",
+      wind_speed: "Vind",
+      wind_gust: "Vindstød",
+      uv_index: "UV-indeks",
+      rain_current: "Regn",
+      rain_24h: "Regn 24 t",
+    },
+    card: {
+      wind_placeholder: "Vind",
+      invalid_config: "Ugyldig konfiguration",
+    },
+    editor: {
+      tab_entities: "Enheder",
+      tab_colors: "Farver",
+      fields: {
+        title: "Titel",
+        temperature: "Temperatur",
+        humidity: "Luftfugtighed",
+        pressure: "Lufttryk",
+        wind_speed: "Vindhastighed",
+        wind_gust: "Vindstød",
+        wind_direction: "Vindretning (° eller tekst)",
+        wind_arrow_invert: "Vend pil (viser retningen vinden blæser hen mod)",
+        wind_text_invert: "Vend tekst/grader (viser retningen vinden blæser hen mod)",
+        uv_index: "UV-indeks",
+        rain_current: "Regn nu (mm)",
+        rain_24h: "Regn 24 t (mm)",
+      },
+      colors_hint:
+        "Farven gælder fra den angivne værdi og opefter (sorteret stigende). Uden tærskler bruges standardfarven.",
+      no_thresholds: "Ingen tærskler – standardfarve",
+      add_threshold: "Tilføj tærskel",
+      remove_threshold: "Fjern tærskel",
+    },
+  },
+};
+
+const FALLBACK_LANG = "en";
+
+/**
+ * Look up a dot-path translation key (e.g. "editor.tab_colors") for the
+ * given HA frontend language, falling back to English, then to the key
+ * itself if nothing matches.
+ */
+function localize(hassOrLang, path) {
+  const lang =
+    (typeof hassOrLang === "string" ? hassOrLang : hassOrLang?.language) ||
+    FALLBACK_LANG;
+  const lookup = (l) =>
+    path
+      .split(".")
+      .reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), TRANSLATIONS[l]);
+  return lookup(lang) ?? lookup(FALLBACK_LANG) ?? path;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helper functions                                                   */
 /* ------------------------------------------------------------------ */
 
 const COMPASS_16 = [
@@ -87,16 +234,19 @@ function resolveColor(thresholds, value, fallback) {
   return col;
 }
 
-/* Shared metric definitions (key → label / unit / default color / icon) */
+/* Shared metric definitions (key → unit / default color / icon).
+ * Labels are no longer hardcoded here — they're looked up via
+ * localize(hass, `metrics.${key}`) at render time so they follow
+ * hass.language. */
 const METRICS = [
-  { key: "temperature",  label: "Temperatur",  unit: "°C",   def: "#ef5350", icon: "mdi:thermometer",            digits: 1 },
-  { key: "humidity",     label: "Luftfeuchte", unit: "%",    def: "#42a5f5", icon: "mdi:water-percent",          digits: 0 },
-  { key: "pressure",     label: "Luftdruck",   unit: "hPa",  def: "#ab47bc", icon: "mdi:gauge",                  digits: 0 },
-  { key: "wind_speed",   label: "Wind",        unit: "km/h", def: "#26c6da", icon: "mdi:weather-windy",          digits: 0 },
-  { key: "wind_gust",    label: "Böen",        unit: "km/h", def: "#26a69a", icon: "mdi:weather-windy-variant",  digits: 0 },
-  { key: "uv_index",     label: "UV-Index",    unit: "",     def: "#ffa726", icon: "mdi:weather-sunny",          digits: 0 },
-  { key: "rain_current", label: "Regen",       unit: "mm",   def: "#5c6bc0", icon: "mdi:weather-pouring",        digits: 1 },
-  { key: "rain_24h",     label: "Regen 24 h",  unit: "mm",   def: "#3949ab", icon: "mdi:weather-rainy",          digits: 1 },
+  { key: "temperature",  unit: "°C",   def: "#ef5350", icon: "mdi:thermometer",            digits: 1 },
+  { key: "humidity",     unit: "%",    def: "#42a5f5", icon: "mdi:water-percent",          digits: 0 },
+  { key: "pressure",     unit: "hPa",  def: "#ab47bc", icon: "mdi:gauge",                  digits: 0 },
+  { key: "wind_speed",   unit: "km/h", def: "#26c6da", icon: "mdi:weather-windy",          digits: 0 },
+  { key: "wind_gust",    unit: "km/h", def: "#26a69a", icon: "mdi:weather-windy-variant",  digits: 0 },
+  { key: "uv_index",     unit: "",     def: "#ffa726", icon: "mdi:weather-sunny",          digits: 0 },
+  { key: "rain_current", unit: "mm",   def: "#5c6bc0", icon: "mdi:weather-pouring",        digits: 1 },
+  { key: "rain_24h",     unit: "mm",   def: "#3949ab", icon: "mdi:weather-rainy",          digits: 1 },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -139,7 +289,7 @@ class WeatherStationCard extends LitElement {
   }
 
   setConfig(config) {
-    if (!config) throw new Error("Ungültige Konfiguration");
+    if (!config) throw new Error(localize(FALLBACK_LANG, "card.invalid_config"));
     const merged = {
       title: "Weather Station",
       temperature: "",
@@ -325,7 +475,7 @@ class WeatherStationCard extends LitElement {
       return {
         entity: c[m.key],
         icon: m.icon,
-        label: m.label,
+        label: localize(this.hass, `metrics.${m.key}`),
         value,
         unit: this._unit(c[m.key], m.unit),
         color: resolveColor(ct[m.key], value, m.def),
@@ -346,7 +496,7 @@ class WeatherStationCard extends LitElement {
           >
             ${this._renderRose(arrowDeg)}
             <div class="compass-caption">
-              <span class="dir">${textDeg !== null ? degToCompass(textDeg) : "Wind"}</span>
+              <span class="dir">${textDeg !== null ? degToCompass(textDeg) : localize(this.hass, "card.wind_placeholder")}</span>
               ${textDeg !== null
                 ? html`<span class="deg">${fmt(textDeg, 0)}°</span>`
                 : ""}
@@ -565,22 +715,7 @@ class WeatherStationCardEditor extends LitElement {
   }
 
   _label(s) {
-    return (
-      {
-        title: "Titel",
-        temperature: "Temperatur",
-        humidity: "Luftfeuchte",
-        pressure: "Luftdruck",
-        wind_speed: "Windgeschwindigkeit",
-        wind_gust: "Windböen",
-        wind_direction: "Windrichtung (° oder Text)",
-        wind_arrow_invert: "Pfeil umkehren (zeigt Richtung, in die der Wind weht)",
-        wind_text_invert: "Text/Grad umkehren (zeigt Richtung, in die der Wind weht)",
-        uv_index: "UV-Index",
-        rain_current: "Regen aktuell (mm)",
-        rain_24h: "Regen 24 h (mm)",
-      }[s.name] || s.name
-    );
+    return localize(this.hass, `editor.fields.${s.name}`);
   }
 
   _valueChanged(ev) {
@@ -633,20 +768,21 @@ class WeatherStationCardEditor extends LitElement {
 
   _renderColors() {
     return html`
-      <div class="hint">
-        Lege je Messwert Farbschwellen fest. Die Farbe gilt <b>ab</b> dem
-        angegebenen Wert aufwärts (aufsteigend sortiert). Ohne Schwellen bleibt
-        die Standardfarbe des Icons.
-      </div>
+      <div class="hint">${localize(this.hass, "editor.colors_hint")}</div>
+      <!-- Note: the bold "ab"/"upward" emphasis from the original German
+           text was dropped — translation strings are kept as plain text
+           rather than embedding HTML, which is the safer i18n pattern
+           (translators shouldn't need to handle markup). -->
       ${METRICS.map((m) => {
         const list = this._thresholds(m.key);
+        const metricLabel = localize(this.hass, `metrics.${m.key}`);
         return html`
           <div class="metric">
             <div class="metric-head">
-              ${m.label}${m.unit ? html` <span class="mu">(${m.unit})</span>` : ""}
+              ${metricLabel}${m.unit ? html` <span class="mu">(${m.unit})</span>` : ""}
             </div>
             ${list.length === 0
-              ? html`<div class="empty">Keine Schwellen – Standardfarbe</div>`
+              ? html`<div class="empty">${localize(this.hass, "editor.no_thresholds")}</div>`
               : list.map(
                   (t, i) => html`
                     <div class="trow">
@@ -667,7 +803,7 @@ class WeatherStationCardEditor extends LitElement {
                       />
                       <button
                         class="ticon"
-                        title="Schwelle entfernen"
+                        title="${localize(this.hass, "editor.remove_threshold")}"
                         @click=${() => this._removeRow(m.key, i)}
                       >
                         <ha-icon icon="mdi:delete"></ha-icon>
@@ -676,7 +812,7 @@ class WeatherStationCardEditor extends LitElement {
                   `
                 )}
             <button class="tadd" @click=${() => this._addRow(m.key)}>
-              <ha-icon icon="mdi:plus"></ha-icon> Schwelle hinzufügen
+              <ha-icon icon="mdi:plus"></ha-icon> ${localize(this.hass, "editor.add_threshold")}
             </button>
           </div>
         `;
@@ -709,13 +845,13 @@ class WeatherStationCardEditor extends LitElement {
           class="tab ${tab === "entities" ? "active" : ""}"
           @click=${() => this._setTab("entities")}
         >
-          Entitäten
+          ${localize(this.hass, "editor.tab_entities")}
         </button>
         <button
           class="tab ${tab === "colors" ? "active" : ""}"
           @click=${() => this._setTab("colors")}
         >
-          Farben
+          ${localize(this.hass, "editor.tab_colors")}
         </button>
       </div>
       ${tab === "entities"
